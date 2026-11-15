@@ -1,0 +1,40 @@
+name: Notifiche fisica
+
+on:
+  schedule:
+    # ogni 15 minuti, a minuti "storti" per evitare i picchi di GitHub
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:   # permette di lanciarlo a mano dal sito
+
+permissions:
+  contents: write      # serve per salvare seen.json
+
+concurrency:
+  group: notifiche-fisica
+  cancel-in-progress: false
+
+jobs:
+  notifica:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installa le librerie
+        run: pip install feedparser==6.0.11 requests
+
+      - name: Controlla i feed e invia su Telegram
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python notify.py
+
+      - name: Salva lo stato
+        run: |
+          git config user.name "notifiche-fisica"
+          git config user.email "notifiche-fisica@users.noreply.github.com"
+          git add seen.json
+          git diff --staged --quiet || (git commit -m "aggiorna stato" && git push)
