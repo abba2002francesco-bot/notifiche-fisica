@@ -24,7 +24,7 @@ ROOT = pathlib.Path(__file__).parent
 FEEDS_FILE = ROOT / "feeds.txt"
 SEEN_FILE = ROOT / "seen.json"
 
-MAX_ITEMS_PER_DIGEST = 5    # quanti articoli (i più interessanti) mandare in ogni digest
+MAX_ITEMS_PER_DIGEST = 7    # quanti articoli mandare in ogni digest (almeno 1 per campo, se c'è)
 MAX_PER_SOURCE = {"arXiv": 2}   # al massimo 2 preprint per digest
 SNIPPET_CHARS = 170         # lunghezza della descrizione sotto ogni titolo
 TRADUCI = True              # traduce le descrizioni in italiano (se fallisce, resta l'inglese)
@@ -56,18 +56,17 @@ FIELDS = [
         "magnet", "crystal", "lattice", "superfluid", "vortex", "vortic", "phonon"]),
     ("💥 Particelle e nucleare", [
         "particle", "higgs", "neutrino", "collider", "lhc", "cern", "quark", "muon",
-        "nuclear", "nucleus", "boson", "standard model", "antimatter"]),
-    ("💡 Ottica e laser", ["laser", "photon", "optic", "plasmon"]),
+        "nuclear", "nucleus", "boson", "standard model", "antimatter", "axion", "qcd",
+        "hadron", "collision"]),
+    ("💡 Ottica e laser", ["laser", "photon", "optic", "plasmon", "ultracold", "optical clock"]),
 ]
 OTHER = "📰 Altro"
 
 # Punteggio di "interesse" per scegliere gli articoli migliori (modifica i pesi come vuoi).
+# Gli articoli con le PRIORITY_WORDS (⭐) hanno un forte bonus a prescindere dal campo.
 SOURCE_WEIGHT = {"Quanta": 3, "Physics World": 1, "Phys.org": 0, "arXiv": 0}
-FIELD_WEIGHT = {
-    "🕳️ Gravità e buchi neri": 2,
-    "⚛️ Quantistica": 2,
-    "🌌 Cosmologia e astrofisica": 1,
-}
+# Bonus per favorire un campo (es. "⚛️ Quantistica": 2). Vuoto = nessun campo favorito.
+FIELD_WEIGHT = {}
 PEER_WORDS = ["physical review", "phys. rev", "nature physics", "published in"]
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -170,17 +169,33 @@ def score(it):
 
 
 def select(items):
-    """Sceglie i più interessanti, rispettando il limite per fonte."""
+    """Sceglie gli articoli: prima il migliore di ogni campo (quadro completo),
+    poi completa con i migliori rimasti. Rispetta il limite per fonte."""
     ranked = sorted(items, key=score, reverse=True)   # a parità, resta l'ordine dei feed
-    chosen, per_source = [], {}
-    for it in ranked:
+    chosen, taken, per_source = [], set(), {}
+
+    def take(it):
+        chosen.append(it)
+        taken.add(it["uid"])
+        per_source[it["source"]] = per_source.get(it["source"], 0) + 1
+
+    def allowed(it):
+        cap = MAX_PER_SOURCE.get(it["source"])
+        return cap is None or per_source.get(it["source"], 0) < cap
+
+    fields_done = set()
+    for it in ranked:                      # 1) il migliore di ogni campo
         if len(chosen) >= MAX_ITEMS_PER_DIGEST:
             break
-        cap = MAX_PER_SOURCE.get(it["source"])
-        if cap is not None and per_source.get(it["source"], 0) >= cap:
+        if it["field"] == OTHER or it["field"] in fields_done or not allowed(it):
             continue
-        chosen.append(it)
-        per_source[it["source"]] = per_source.get(it["source"], 0) + 1
+        take(it)
+        fields_done.add(it["field"])
+    for it in ranked:                      # 2) poi i migliori rimasti
+        if len(chosen) >= MAX_ITEMS_PER_DIGEST:
+            break
+        if it["uid"] not in taken and allowed(it):
+            take(it)
     return chosen
 
 
