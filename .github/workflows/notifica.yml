@@ -2,9 +2,15 @@ name: Notifiche fisica
 
 on:
   schedule:
-    # ogni 15 minuti, a minuti "storti" per evitare i picchi di GitHub
-    - cron: "7,22,37,52 * * * *"
+    # 3 digest al giorno, alle 06:30, 12:30 e 18:30 UTC
+    # = circa 7:30, 13:30 e 19:30 in Italia d'inverno (8:30, 14:30, 20:30 d'estate)
+    - cron: "30 6,12,18 * * *"
   workflow_dispatch:   # permette di lanciarlo a mano dal sito
+    inputs:
+      anteprima:
+        description: "Manda un digest di prova con gli ultimi articoli (non cambia lo stato)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write      # serve per salvare seen.json
@@ -30,6 +36,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PREVIEW: ${{ inputs.anteprima }}
         run: python notify.py
 
       - name: Salva lo stato
