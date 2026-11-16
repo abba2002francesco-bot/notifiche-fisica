@@ -5,14 +5,29 @@
 https://www.quantamagazine.org/physics/feed/
 https://physicsworld.com/feed/
 https://phys.org/rss-feed/physics-news/
+https://phys.org/rss-feed/physics-news/condensed-matter/
+https://phys.org/rss-feed/physics-news/quantum-physics/
 https://phys.org/rss-feed/space-news/astronomy/
 
 # --- arXiv (preprint) ---
 # Escono in blocco una volta al giorno e sono centinaia: per questo li filtro per parola chiave.
 # Modifica le parole come vuoi (non distingue maiuscole/minuscole).
+
+# Fondamenti: quantistica, gravità, teoria
 https://rss.arxiv.org/rss/quant-ph+gr-qc+hep-th | hawking, black hole, many-worlds, everett, decoherence, entanglement, measurement problem, quantum gravity, bell inequalit, information paradox
+
+# Particelle e nucleare
+https://rss.arxiv.org/rss/hep-ph+hep-ex+nucl-th+nucl-ex | higgs, neutrino, collider, lhc, cern, muon, quark, standard model, axion, antimatter, qcd, hadron
+
+# Materia condensata
+https://rss.arxiv.org/rss/cond-mat | superconduct, topological, superfluid, bose-einstein, quantum material, moiré, graphene, spin liquid, strongly correlated
+
+# Ottica e atomi
+https://rss.arxiv.org/rss/physics.optics+physics.atom-ph | ultracold, optical clock, quantum optics, laser cooling, photonic
+
+# Astrofisica e cosmologia
 https://rss.arxiv.org/rss/astro-ph | gravitational wave, dark matter, dark energy, black hole, neutron star
 
 # --- Altre idee (togli il # per attivarle; verifica prima che l'URL funzioni) ---
 # Physics Magazine (APS): prendi l'URL del feed da https://journals.aps.org/feeds
-# Media INAF, INFN, Nature Physics: cerca il link "RSS" nel loro sito
+# Media INAF, INFN, CERN, Nature Physics: cerca il link "RSS" nel loro sito
