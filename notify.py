@@ -10,6 +10,7 @@ import html
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 from datetime import datetime
@@ -23,7 +24,10 @@ ROOT = pathlib.Path(__file__).parent
 FEEDS_FILE = ROOT / "feeds.txt"
 SEEN_FILE = ROOT / "seen.json"
 
-MAX_ITEMS_PER_DIGEST = 40   # il resto resta in coda per il digest successivo
+MAX_ITEMS_PER_DIGEST = 5    # quanti articoli (i più interessanti) mandare in ogni digest
+MAX_PER_SOURCE = {"arXiv": 2}   # al massimo 2 preprint per digest
+SNIPPET_CHARS = 170         # lunghezza della descrizione sotto ogni titolo
+TRADUCI = True              # traduce le descrizioni in italiano (se fallisce, resta l'inglese)
 MAX_SEEN = 5000             # quanti ID ricordare al massimo
 TG_LIMIT = 3800             # lunghezza massima di un messaggio (Telegram: 4096)
 PREVIEW = os.environ.get("PREVIEW", "").lower() == "true"
@@ -56,6 +60,15 @@ FIELDS = [
     ("💡 Ottica e laser", ["laser", "photon", "optic", "plasmon"]),
 ]
 OTHER = "📰 Altro"
+
+# Punteggio di "interesse" per scegliere gli articoli migliori (modifica i pesi come vuoi).
+SOURCE_WEIGHT = {"Quanta": 3, "Physics World": 1, "Phys.org": 0, "arXiv": 0}
+FIELD_WEIGHT = {
+    "🕳️ Gravità e buchi neri": 2,
+    "⚛️ Quantistica": 2,
+    "🌌 Cosmologia e astrofisica": 1,
+}
+PEER_WORDS = ["physical review", "phys. rev", "nature physics", "published in"]
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -112,6 +125,65 @@ def classify(text):
     return OTHER
 
 
+def clean_snippet(summary, title):
+    """Ricava una breve descrizione leggibile dal riassunto del feed."""
+    text = re.sub(r"<[^>]+>", " ", summary)
+    text = html.unescape(text)
+    text = re.sub(r"arXiv:\S+\s+Announce Type:\s*\S+\s*", "", text)   # intestazione arXiv
+    text = re.sub(r"^\s*Abstract:\s*", "", text)
+    text = re.sub(r"The post .*? appeared first on .*", "", text, flags=re.S)
+    text = " ".join(text.split())
+    if not text or text.lower().startswith(title.lower()[:30]):
+        return ""
+    if len(text) > SNIPPET_CHARS:
+        cut = text[:SNIPPET_CHARS]
+        dot = cut.rfind(". ")
+        cut = cut[:dot + 1] if dot > 80 else cut[:cut.rfind(" ")] + "…"
+        text = cut
+    return text
+
+
+_translate_ok = True
+
+
+def translate(text):
+    """Traduzione automatica in italiano; se qualcosa va storto, resta l'originale."""
+    global _translate_ok
+    if not TRADUCI or not _translate_ok or not text:
+        return text
+    try:
+        from deep_translator import GoogleTranslator
+        return GoogleTranslator(source="auto", target="it").translate(text) or text
+    except Exception as exc:  # rete, blocchi di Google, libreria mancante...
+        print("[avviso] traduzione non riuscita, uso l'originale:", exc)
+        _translate_ok = False
+        return text
+
+
+def score(it):
+    s = 5 if it["star"] else 0
+    s += SOURCE_WEIGHT.get(it["source"], 0)
+    s += FIELD_WEIGHT.get(it["field"], 0)
+    if any(w in it["text"] for w in PEER_WORDS):
+        s += 1
+    return s
+
+
+def select(items):
+    """Sceglie i più interessanti, rispettando il limite per fonte."""
+    ranked = sorted(items, key=score, reverse=True)   # a parità, resta l'ordine dei feed
+    chosen, per_source = [], {}
+    for it in ranked:
+        if len(chosen) >= MAX_ITEMS_PER_DIGEST:
+            break
+        cap = MAX_PER_SOURCE.get(it["source"])
+        if cap is not None and per_source.get(it["source"], 0) >= cap:
+            continue
+        chosen.append(it)
+        per_source[it["source"]] = per_source.get(it["source"], 0) + 1
+    return chosen
+
+
 def collect_new(feeds, seen, ignore_seen=False):
     """Restituisce la lista degli articoli non ancora inviati (come dizionari)."""
     found, done = [], set()
@@ -122,7 +194,6 @@ def collect_new(feeds, seen, ignore_seen=False):
             continue
         source = source_name(url, parsed.feed.get("title"))
         preprint = "arxiv" in urlparse(url).netloc.lower()
-        batch = []
         for e in parsed.entries:
             uid = e.get("id") or e.get("link")
             if not uid or uid in done or (uid in seen and not ignore_seen):
@@ -131,21 +202,22 @@ def collect_new(feeds, seen, ignore_seen=False):
             # arXiv: ignora le semplici revisioni di articoli già usciti
             if "Announce Type: replace" in summary:
                 continue
-            title = e.get("title", "(senza titolo)")
+            title = " ".join(e.get("title", "(senza titolo)").split())
             text = (title + " " + summary).lower()
             if keywords and not any(k in text for k in keywords):
                 continue
             done.add(uid)
-            batch.append({
+            found.append({
                 "uid": uid,
-                "title": " ".join(title.split()),
+                "title": title,
                 "link": e.get("link", uid),
                 "source": source,
                 "preprint": preprint,
                 "field": classify(text),
                 "star": any(w in text for w in PRIORITY_WORDS),
+                "snippet": clean_snippet(summary, title),
+                "text": text,
             })
-        found.extend(batch)
     return found
 
 
@@ -153,13 +225,16 @@ def format_item(it):
     mark = "⭐" if it["star"] else "•"
     tail = it["source"] + (" · preprint" if it["preprint"] else "")
     link = html.escape(it["link"], quote=True)
-    return f'{mark} <a href="{link}">{html.escape(it["title"])}</a> — <i>{html.escape(tail)}</i>'
+    out = f'{mark} <a href="{link}">{html.escape(it["title"])}</a>\n'
+    if it["snippet"]:
+        out += f'{html.escape(it["snippet"])} '
+    return out + f"<i>({html.escape(tail)})</i>"
 
 
-def build_messages(items):
+def build_messages(items, total):
     """Raggruppa gli articoli per campo e li impacchetta in uno o più messaggi."""
     now = datetime.now(ZoneInfo("Europe/Rome")).strftime("%d/%m %H:%M")
-    head = f"🆕 <b>{len(items)} nuovi articoli</b> · {now}"
+    head = f"🆕 <b>{len(items)} articoli scelti</b> su {total} nuovi · {now}"
 
     by_field = {}
     for it in items:
@@ -171,7 +246,7 @@ def build_messages(items):
         if not group:
             continue
         group.sort(key=lambda it: not it["star"])  # i ⭐ per primi
-        lines = [f"\n<b>{field}</b> ({len(group)})"] + [format_item(it) for it in group]
+        lines = [f"\n<b>{field}</b>"] + [format_item(it) for it in group]
         for i, line in enumerate(lines):
             if size + len(line) + 1 > TG_LIMIT:
                 messages.append("\n".join(buf))
@@ -183,15 +258,23 @@ def build_messages(items):
     return messages
 
 
+def send_digest(all_items):
+    chosen = select(all_items)
+    for it in chosen:
+        it["snippet"] = translate(it["snippet"])
+    for msg in build_messages(chosen, len(all_items)):
+        send(msg)
+        time.sleep(1)
+
+
 def main():
     feeds = read_feeds()
 
     if PREVIEW:
-        # Anteprima: digest con gli ultimi articoli, senza toccare lo stato
-        items = collect_new(feeds, set(), ignore_seen=True)[:12]
-        for msg in build_messages(items):
-            send(msg)
-            time.sleep(1)
+        # Anteprima: digest con gli articoli più recenti, senza toccare lo stato
+        items = collect_new(feeds, set(), ignore_seen=True)
+        if items:
+            send_digest(items)
         return
 
     first_run = not SEEN_FILE.exists()
@@ -200,19 +283,12 @@ def main():
 
     if first_run:
         # Prima esecuzione: segna tutto come già visto, senza inondarti di messaggi
-        seen.extend(it["uid"] for it in items)
         send("✅ Notifiche di fisica attive. Da ora ricevi qui le novità.")
-    else:
-        batch = items[:MAX_ITEMS_PER_DIGEST]
-        if batch:
-            for msg in build_messages(batch):
-                send(msg)
-                time.sleep(1)
-            seen.extend(it["uid"] for it in batch)
-        rimasti = len(items) - len(batch)
-        if rimasti > 0:
-            print(f"{rimasti} articoli rimandati al prossimo digest")
+    elif items:
+        send_digest(items)
 
+    # Gli articoli non scelti vengono scartati: non ricompaiono nei digest successivi
+    seen.extend(it["uid"] for it in items)
     SEEN_FILE.write_text(json.dumps(seen[-MAX_SEEN:]))
 
 
